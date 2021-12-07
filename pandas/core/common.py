@@ -32,10 +32,11 @@ from pandas._typing import (
     AnyArrayLike,
     ArrayLike,
     NpDtype,
+    RandomState,
     Scalar,
     T,
 )
-from pandas.compat import np_version_under1p18
+from pandas.util._exceptions import find_stack_level
 
 from pandas.core.dtypes.cast import construct_1d_object_array_from_listlike
 from pandas.core.dtypes.common import (
@@ -53,9 +54,6 @@ from pandas.core.dtypes.inference import iterable_not_string
 from pandas.core.dtypes.missing import isna
 
 if TYPE_CHECKING:
-    # Includes BitGenerator, which only exists >= 1.18
-    from pandas._typing import RandomState
-
     from pandas import Index
 
 
@@ -148,7 +146,11 @@ def is_bool_indexer(key: Any) -> bool:
             return True
     elif isinstance(key, list):
         # check if np.array(key).dtype would be bool
-        return len(key) > 0 and lib.is_bool_list(key)
+        if len(key) > 0:
+            if type(key) is not list:
+                # GH#42461 cython will raise TypeError if we pass a subclass
+                key = list(key)
+            return lib.is_bool_list(key)
 
     return False
 
@@ -174,7 +176,7 @@ def cast_scalar_indexer(val, warn_float: bool = False):
                 "Indexing with a float is deprecated, and will raise an IndexError "
                 "in pandas 2.0. You can manually convert to an integer key instead.",
                 FutureWarning,
-                stacklevel=3,
+                stacklevel=find_stack_level(),
             )
         return int(val)
     return val
@@ -231,12 +233,7 @@ def asarray_tuplesafe(values, dtype: NpDtype | None = None) -> np.ndarray:
         # expected "ndarray")
         return values._values  # type: ignore[return-value]
 
-    # error: Non-overlapping container check (element type: "Union[str, dtype[Any],
-    # None]", container item type: "type")
-    if isinstance(values, list) and dtype in [  # type: ignore[comparison-overlap]
-        np.object_,
-        object,
-    ]:
+    if isinstance(values, list) and dtype in [np.object_, object]:
         return construct_1d_object_array_from_listlike(values)
 
     result = np.asarray(values, dtype=dtype)
@@ -433,7 +430,7 @@ def random_state(state: RandomState | None = None):
     if (
         is_integer(state)
         or is_array_like(state)
-        or (not np_version_under1p18 and isinstance(state, np.random.BitGenerator))
+        or isinstance(state, np.random.BitGenerator)
     ):
         # error: Argument 1 to "RandomState" has incompatible type "Optional[Union[int,
         # Union[ExtensionArray, ndarray[Any, Any]], Generator, RandomState]]"; expected

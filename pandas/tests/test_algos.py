@@ -9,10 +9,7 @@ from pandas._libs import (
     algos as libalgos,
     hashtable as ht,
 )
-from pandas.compat import (
-    PY310,
-    np_array_datetime64_compat,
-)
+from pandas.compat import np_array_datetime64_compat
 import pandas.util._test_decorators as td
 
 from pandas.core.dtypes.common import (
@@ -71,7 +68,7 @@ class TestFactorize:
         expected_codes = np.asarray(expected_codes, dtype=np.intp)
 
         tm.assert_numpy_array_equal(result_codes, expected_codes)
-        tm.assert_index_equal(result_uniques, expected_uniques)
+        tm.assert_index_equal(result_uniques, expected_uniques, exact=True)
 
     def test_series_factorize_na_sentinel_none(self):
         # GH#35667
@@ -244,17 +241,13 @@ class TestFactorize:
         # gh 12666 - check no segfault
         x17 = np.array([complex(i) for i in range(17)], dtype=object)
 
-        msg = (
-            "unorderable types: .* [<>] .*"
-            "|"  # the above case happens for numpy < 1.14
-            "'[<>]' not supported between instances of .*"
-        )
+        msg = "'[<>]' not supported between instances of .*"
         with pytest.raises(TypeError, match=msg):
             algos.factorize(x17[::-1], sort=True)
 
-    def test_numeric_dtype_factorize(self, any_real_dtype):
+    def test_numeric_dtype_factorize(self, any_real_numpy_dtype):
         # GH41132
-        dtype = any_real_dtype
+        dtype = any_real_numpy_dtype
         data = np.array([1, 2, 2, 1], dtype=dtype)
         expected_codes = np.array([0, 1, 1, 0], dtype=np.intp)
         expected_uniques = np.array([1, 2], dtype=dtype)
@@ -786,9 +779,8 @@ class TestUnique:
         expected = np.array([np.nan])
         tm.assert_numpy_array_equal(result, expected)
 
-    # Flaky on Python 3.10 -> Don't make strict
-    @pytest.mark.xfail(PY310, reason="Failing on Python 3.10 GH41940", strict=False)
-    def test_first_nan_kept(self):
+    @pytest.mark.parametrize("el_type", [np.float64, object])
+    def test_first_nan_kept(self, el_type):
         # GH 22295
         # create different nans from bit-patterns:
         bits_for_nan1 = 0xFFF8000000000001
@@ -797,13 +789,12 @@ class TestUnique:
         NAN2 = struct.unpack("d", struct.pack("=Q", bits_for_nan2))[0]
         assert NAN1 != NAN1
         assert NAN2 != NAN2
-        for el_type in [np.float64, object]:
-            a = np.array([NAN1, NAN2], dtype=el_type)
-            result = pd.unique(a)
-            assert result.size == 1
-            # use bit patterns to identify which nan was kept:
-            result_nan_bits = struct.unpack("=Q", struct.pack("d", result[0]))[0]
-            assert result_nan_bits == bits_for_nan1
+        a = np.array([NAN1, NAN2], dtype=el_type)
+        result = pd.unique(a)
+        assert result.size == 1
+        # use bit patterns to identify which nan was kept:
+        result_nan_bits = struct.unpack("=Q", struct.pack("d", result[0]))[0]
+        assert result_nan_bits == bits_for_nan1
 
     def test_do_not_mangle_na_values(self, unique_nulls_fixture, unique_nulls_fixture2):
         # GH 22295
@@ -993,8 +984,6 @@ class TestIsin:
         # different objects -> False
         tm.assert_numpy_array_equal(algos.isin([a], [b]), np.array([False]))
 
-    # Flaky on Python 3.10 -> Don't make strict
-    @pytest.mark.xfail(PY310, reason="Failing on Python 3.10 GH41940", strict=False)
     def test_different_nans(self):
         # GH 22160
         # all nans are handled as equivalent
@@ -1037,8 +1026,6 @@ class TestIsin:
         result = algos.isin(vals, empty)
         tm.assert_numpy_array_equal(expected, result)
 
-    # Flaky on Python 3.10 -> Don't make strict
-    @pytest.mark.xfail(PY310, reason="Failing on Python 3.10 GH41940", strict=False)
     def test_different_nan_objects(self):
         # GH 22119
         comps = np.array(["nan", np.nan * 1j, float("nan")], dtype=object)
@@ -1274,21 +1261,20 @@ class TestValueCounts:
         expected = Series([3, 2, 1], index=[5.0, 10.3, np.nan])
         tm.assert_series_equal(result, expected)
 
-    def test_value_counts_normalized(self):
+    @pytest.mark.parametrize("dtype", (np.float64, object, "M8[ns]"))
+    def test_value_counts_normalized(self, dtype):
         # GH12558
         s = Series([1] * 2 + [2] * 3 + [np.nan] * 5)
-        dtypes = (np.float64, object, "M8[ns]")
-        for t in dtypes:
-            s_typed = s.astype(t)
-            result = s_typed.value_counts(normalize=True, dropna=False)
-            expected = Series(
-                [0.5, 0.3, 0.2], index=Series([np.nan, 2.0, 1.0], dtype=t)
-            )
-            tm.assert_series_equal(result, expected)
+        s_typed = s.astype(dtype)
+        result = s_typed.value_counts(normalize=True, dropna=False)
+        expected = Series(
+            [0.5, 0.3, 0.2], index=Series([np.nan, 2.0, 1.0], dtype=dtype)
+        )
+        tm.assert_series_equal(result, expected)
 
-            result = s_typed.value_counts(normalize=True, dropna=True)
-            expected = Series([0.6, 0.4], index=Series([2.0, 1.0], dtype=t))
-            tm.assert_series_equal(result, expected)
+        result = s_typed.value_counts(normalize=True, dropna=True)
+        expected = Series([0.6, 0.4], index=Series([2.0, 1.0], dtype=dtype))
+        tm.assert_series_equal(result, expected)
 
     def test_value_counts_uint64(self):
         arr = np.array([2 ** 63], dtype=np.uint64)
@@ -1492,13 +1478,10 @@ class TestDuplicated:
                 res_false = s.duplicated(keep=False)
                 tm.assert_series_equal(res_false, Series(exp_false))
 
-    def test_unique_index(self):
-        cases = [Index([1, 2, 3]), pd.RangeIndex(0, 3)]
-        for case in cases:
-            assert case.is_unique is True
-            tm.assert_numpy_array_equal(
-                case.duplicated(), np.array([False, False, False])
-            )
+    @pytest.mark.parametrize("case", [Index([1, 2, 3]), pd.RangeIndex(0, 3)])
+    def test_unique_index(self, case):
+        assert case.is_unique is True
+        tm.assert_numpy_array_equal(case.duplicated(), np.array([False, False, False]))
 
     @pytest.mark.parametrize(
         "arr, uniques",
@@ -1520,6 +1503,21 @@ class TestDuplicated:
         expected[:] = uniques
 
         result = pd.unique(arr)
+        tm.assert_numpy_array_equal(result, expected)
+
+    @pytest.mark.parametrize(
+        "array,expected",
+        [
+            (
+                [1 + 1j, 0, 1, 1j, 1 + 2j, 1 + 2j],
+                # Should return a complex dtype in the future
+                np.array([(1 + 1j), 0j, (1 + 0j), 1j, (1 + 2j)], dtype=object),
+            )
+        ],
+    )
+    def test_unique_complex_numbers(self, array, expected):
+        # GH 17927
+        result = pd.unique(array)
         tm.assert_numpy_array_equal(result, expected)
 
 
@@ -1725,17 +1723,9 @@ class TestHashTable:
         tbl = hashtable(size_hint=size_hint)  # noqa
 
 
-def test_quantile():
-    s = Series(np.random.randn(100))
-
-    result = algos.quantile(s, [0, 0.25, 0.5, 0.75, 1.0])
-    expected = algos.quantile(s.values, [0, 0.25, 0.5, 0.75, 1.0])
-    tm.assert_almost_equal(result, expected)
-
-
 def test_unique_label_indices():
 
-    a = np.random.randint(1, 1 << 10, 1 << 15).astype("int64")
+    a = np.random.randint(1, 1 << 10, 1 << 15).astype(np.intp)
 
     left = ht.unique_label_indices(a)
     right = np.unique(a, return_index=True)[1]
@@ -1750,20 +1740,25 @@ def test_unique_label_indices():
 
 class TestRank:
     @td.skip_if_no_scipy
-    def test_scipy_compat(self):
+    @pytest.mark.parametrize(
+        "arr",
+        [
+            [np.nan, np.nan, 5.0, 5.0, 5.0, np.nan, 1, 2, 3, np.nan],
+            [4.0, np.nan, 5.0, 5.0, 5.0, np.nan, 1, 2, 4.0, np.nan],
+        ],
+    )
+    def test_scipy_compat(self, arr):
         from scipy.stats import rankdata
 
-        def _check(arr):
-            mask = ~np.isfinite(arr)
-            arr = arr.copy()
-            result = libalgos.rank_1d(arr)
-            arr[mask] = np.inf
-            exp = rankdata(arr)
-            exp[mask] = np.nan
-            tm.assert_almost_equal(result, exp)
+        arr = np.array(arr)
 
-        _check(np.array([np.nan, np.nan, 5.0, 5.0, 5.0, np.nan, 1, 2, 3, np.nan]))
-        _check(np.array([4.0, np.nan, 5.0, 5.0, 5.0, np.nan, 1, 2, 4.0, np.nan]))
+        mask = ~np.isfinite(arr)
+        arr = arr.copy()
+        result = libalgos.rank_1d(arr)
+        arr[mask] = np.inf
+        exp = rankdata(arr)
+        exp[mask] = np.nan
+        tm.assert_almost_equal(result, exp)
 
     @pytest.mark.parametrize("dtype", np.typecodes["AllInteger"])
     def test_basic(self, writable, dtype):
@@ -1775,12 +1770,12 @@ class TestRank:
         result = algos.rank(ser)
         tm.assert_numpy_array_equal(result, exp)
 
-    def test_uint64_overflow(self):
+    @pytest.mark.parametrize("dtype", [np.float64, np.uint64])
+    def test_uint64_overflow(self, dtype):
         exp = np.array([1, 2], dtype=np.float64)
 
-        for dtype in [np.float64, np.uint64]:
-            s = Series([1, 2 ** 63], dtype=dtype)
-            tm.assert_numpy_array_equal(algos.rank(s), exp)
+        s = Series([1, 2 ** 63], dtype=dtype)
+        tm.assert_numpy_array_equal(algos.rank(s), exp)
 
     def test_too_many_ndims(self):
         arr = np.array([[[1, 2, 3], [4, 5, 6], [7, 8, 9]]])
@@ -1791,13 +1786,13 @@ class TestRank:
 
     @pytest.mark.single
     @pytest.mark.high_memory
-    @pytest.mark.parametrize(
-        "values",
-        [np.arange(2 ** 24 + 1), np.arange(2 ** 25 + 2).reshape(2 ** 24 + 1, 2)],
-        ids=["1d", "2d"],
-    )
-    def test_pct_max_many_rows(self, values):
+    def test_pct_max_many_rows(self):
         # GH 18271
+        values = np.arange(2 ** 24 + 1)
+        result = algos.rank(values, pct=True).max()
+        assert result == 1
+
+        values = np.arange(2 ** 25 + 2).reshape(2 ** 24 + 1, 2)
         result = algos.rank(values, pct=True).max()
         assert result == 1
 
@@ -1825,21 +1820,6 @@ def test_pad_backfill_object_segfault():
 
 
 class TestTseriesUtil:
-    def test_combineFunc(self):
-        pass
-
-    def test_reindex(self):
-        pass
-
-    def test_isna(self):
-        pass
-
-    def test_groupby(self):
-        pass
-
-    def test_groupby_withnull(self):
-        pass
-
     def test_backfill(self):
         old = Index([1, 5, 10])
         new = Index(list(range(12)))
@@ -2280,7 +2260,8 @@ class TestMode:
         exp = Series([], dtype=np.float64, index=Index([], dtype=int))
         tm.assert_series_equal(algos.mode([]), exp)
 
-    def test_mode_single(self):
+    @pytest.mark.parametrize("dt", np.typecodes["AllInteger"] + np.typecodes["Float"])
+    def test_mode_single(self, dt):
         # GH 15714
         exp_single = [1]
         data_single = [1]
@@ -2288,36 +2269,36 @@ class TestMode:
         exp_multi = [1]
         data_multi = [1, 1]
 
-        for dt in np.typecodes["AllInteger"] + np.typecodes["Float"]:
-            s = Series(data_single, dtype=dt)
-            exp = Series(exp_single, dtype=dt)
-            tm.assert_series_equal(algos.mode(s), exp)
+        s = Series(data_single, dtype=dt)
+        exp = Series(exp_single, dtype=dt)
+        tm.assert_series_equal(algos.mode(s), exp)
 
-            s = Series(data_multi, dtype=dt)
-            exp = Series(exp_multi, dtype=dt)
-            tm.assert_series_equal(algos.mode(s), exp)
+        s = Series(data_multi, dtype=dt)
+        exp = Series(exp_multi, dtype=dt)
+        tm.assert_series_equal(algos.mode(s), exp)
 
+    def test_mode_obj_int(self):
         exp = Series([1], dtype=int)
         tm.assert_series_equal(algos.mode([1]), exp)
 
         exp = Series(["a", "b", "c"], dtype=object)
         tm.assert_series_equal(algos.mode(["a", "b", "c"]), exp)
 
-    def test_number_mode(self):
+    @pytest.mark.parametrize("dt", np.typecodes["AllInteger"] + np.typecodes["Float"])
+    def test_number_mode(self, dt):
         exp_single = [1]
         data_single = [1] * 5 + [2] * 3
 
         exp_multi = [1, 3]
         data_multi = [1] * 5 + [2] * 3 + [3] * 5
 
-        for dt in np.typecodes["AllInteger"] + np.typecodes["Float"]:
-            s = Series(data_single, dtype=dt)
-            exp = Series(exp_single, dtype=dt)
-            tm.assert_series_equal(algos.mode(s), exp)
+        s = Series(data_single, dtype=dt)
+        exp = Series(exp_single, dtype=dt)
+        tm.assert_series_equal(algos.mode(s), exp)
 
-            s = Series(data_multi, dtype=dt)
-            exp = Series(exp_multi, dtype=dt)
-            tm.assert_series_equal(algos.mode(s), exp)
+        s = Series(data_multi, dtype=dt)
+        exp = Series(exp_multi, dtype=dt)
+        tm.assert_series_equal(algos.mode(s), exp)
 
     def test_strobj_mode(self):
         exp = ["b"]
@@ -2327,13 +2308,14 @@ class TestMode:
         exp = Series(exp, dtype="c")
         tm.assert_series_equal(algos.mode(s), exp)
 
+    @pytest.mark.parametrize("dt", [str, object])
+    def test_strobj_multi_char(self, dt):
         exp = ["bar"]
         data = ["foo"] * 2 + ["bar"] * 3
 
-        for dt in [str, object]:
-            s = Series(data, dtype=dt)
-            exp = Series(exp, dtype=dt)
-            tm.assert_series_equal(algos.mode(s), exp)
+        s = Series(data, dtype=dt)
+        exp = Series(exp, dtype=dt)
+        tm.assert_series_equal(algos.mode(s), exp)
 
     def test_datelike_mode(self):
         exp = Series(["1900-05-03", "2011-01-03", "2013-01-02"], dtype="M8[ns]")

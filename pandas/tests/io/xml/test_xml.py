@@ -10,7 +10,6 @@ from urllib.error import HTTPError
 import numpy as np
 import pytest
 
-from pandas.compat import PY38
 import pandas.util._test_decorators as td
 
 from pandas import DataFrame
@@ -255,10 +254,6 @@ def test_parser_consistency_file(datapath):
 @tm.network
 @pytest.mark.slow
 @td.skip_if_no("lxml")
-@pytest.mark.skipif(
-    not PY38,
-    reason=("etree alpha ordered attributes < py3.8"),
-)
 def test_parser_consistency_url(datapath):
     url = (
         "https://data.cityofchicago.org/api/views/"
@@ -714,7 +709,7 @@ def test_utf16_encoding(datapath, parser):
 
 def test_unknown_encoding(datapath, parser):
     filename = datapath("io", "data", "xml", "baby_names.xml")
-    with pytest.raises(LookupError, match=("unknown encoding: uft-8")):
+    with pytest.raises(LookupError, match=("unknown encoding: UFT-8")):
         read_xml(filename, encoding="UFT-8", parser=parser)
 
 
@@ -1049,12 +1044,14 @@ def test_wrong_compression_gz(parser, comp):
 
 @pytest.mark.parametrize("comp", ["bz2", "gzip", "zip"])
 def test_wrong_compression_xz(parser, comp):
-    from lzma import LZMAError
+    lzma = pytest.importorskip("lzma")
 
     with tm.ensure_clean() as path:
         geom_df.to_xml(path, parser=parser, compression=comp)
 
-        with pytest.raises(LZMAError, match="Input format not supported by decoder"):
+        with pytest.raises(
+            lzma.LZMAError, match="Input format not supported by decoder"
+        ):
             read_xml(path, parser=parser, compression="xz")
 
 

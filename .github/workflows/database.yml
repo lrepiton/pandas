@@ -4,10 +4,10 @@ on:
   push:
     branches:
       - master
+      - 1.3.x
   pull_request:
     branches:
       - master
-      - 1.2.x
       - 1.3.x
     paths-ignore:
       - "doc/**"
@@ -31,7 +31,8 @@ jobs:
       fail-fast: false
 
     concurrency:
-      group: ${{ github.ref }}-${{ matrix.ENV_FILE }}
+      # https://github.community/t/concurrecy-not-work-for-push/183068/7
+      group: ${{ github.event_name == 'push' && github.run_number || github.ref }}-${{ matrix.ENV_FILE }}
       cancel-in-progress: true
 
     services:
@@ -62,6 +63,14 @@ jobs:
         ports:
           - 5432:5432
 
+      moto:
+        image: motoserver/moto
+        env:
+          AWS_ACCESS_KEY_ID: foobar_key
+          AWS_SECRET_ACCESS_KEY: foobar_secret
+        ports:
+          - 5000:5000
+
     steps:
     - name: Checkout
       uses: actions/checkout@v2
@@ -80,7 +89,7 @@ jobs:
     - uses: conda-incubator/setup-miniconda@v2
       with:
         activate-environment: pandas-dev
-        channel-priority: flexible
+        channel-priority: strict
         environment-file: ${{ matrix.ENV_FILE }}
         use-only-tar-bz2: true
 
@@ -105,7 +114,7 @@ jobs:
       run: python ci/print_skipped.py
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v1
+      uses: codecov/codecov-action@v2
       with:
         flags: unittests
         name: codecov-pandas
